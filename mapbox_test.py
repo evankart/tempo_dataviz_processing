@@ -48,7 +48,7 @@ def convert_tempo_to_8bit_cog(nc_file, output_file):
     subprocess.run([
         'gdal_translate',
         '-of', 'GTiff',
-        '-b', '1',
+        # '-b', '1',
         '-projwin', str(LA_BOUNDS[0]), str(LA_BOUNDS[3]), str(LA_BOUNDS[2]), str(LA_BOUNDS[1]),
         '-a_srs', 'EPSG:4269',
         netcdf_path,

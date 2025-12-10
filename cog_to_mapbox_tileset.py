@@ -17,7 +17,7 @@ MAPBOX_USERNAME = os.getenv('MAPBOX_USERNAME_UCB')
 GCS_PROJECT_ID = os.getenv('GCS_PROJECT_ID')
 GCS_BUCKET = os.getenv('GCS_BUCKET')
 GCS_BLOB_PREFIX = os.getenv('GCS_BLOB_PREFIX')
-GCS_BLOB_OUTPUT_PREFIX = os.getenv('GCS_BLOB_OUTPUT_PREFIX')
+GCS_BLOB_OUTPUT_PREFIX = os.getenv('GCS_BLOB_OUTPUT_PREFIX') + '2/'
 
 LA_BOUNDARY_URL = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0/query?where=NAME='Louisiana'&outFields=*&outSR=4326&f=geojson"
 LA_BOUNDARY = requests.get(LA_BOUNDARY_URL).json()
@@ -28,7 +28,7 @@ def post_with_backoff(url, **kwargs):
         if r.status_code != 429:
             return r
         # wait and retry after hitting rate limit
-        sleep_seconds = 2 ** attempt # 2, 4, 8, 16, 32 seconds
+        sleep_seconds = 4 ** attempt # 2, 4, 8, 16, 32 seconds
         print(f"  Rate limited (429). Retrying in {sleep_seconds} seconds...")
         time.sleep(sleep_seconds)  
     return r  # last response
@@ -157,14 +157,19 @@ for blob in blobs:
     
     file_count += 1
     
-    if file_count > 31:
-        print(f"\n✓ Reached file limit")
-        break
+    # if file_count > 31:
+    #     print(f"\n✓ Reached file limit")
+    #     break
     
     print(f'\nFile #{file_count}: {blob.name}')
 
     date = extract_date(blob.name)
     mapbox_id = f"{date}-no2"
+
+    # if date is in 2024
+    if date and not date.startswith('2024'):
+        print(f"  Skipping non-2024 date: {date}")
+        continue
 
     # Check if tileset already exists
     if tileset_exists(mapbox_id):
@@ -177,12 +182,14 @@ for blob in blobs:
     processed += 1
 
     try:
+        # Step 1: Upload to Mapbox source
         upload_to_mapbox_source_from_gcs(blob, mapbox_id)
-        # time.sleep(10)
+
+        # Step 2: Create tileset
         create_mapbox_tileset(mapbox_id, mapbox_id, date)
-        # time.sleep(10)
+        
+        # Step 3: Publish tileset
         publish_mapbox_tileset(mapbox_id)
-        # time.sleep(30)
 
         print(f"✓ {date} completed successfully!")
         

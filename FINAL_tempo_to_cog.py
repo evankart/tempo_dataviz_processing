@@ -8,6 +8,8 @@ import re
 import json
 from dotenv import load_dotenv
 import os
+import rasterio
+import numpy as np
 
 load_dotenv()
 
@@ -17,7 +19,7 @@ MAPBOX_USERNAME = os.getenv('MAPBOX_USERNAME')
 GCS_PROJECT_ID = os.getenv('GCS_PROJECT_ID')
 GCS_BUCKET = os.getenv('GCS_BUCKET')
 GCS_BLOB_PREFIX = os.getenv('GCS_BLOB_PREFIX')
-GCS_BLOB_OUTPUT_PREFIX = os.getenv('GCS_BLOB_OUTPUT_PREFIX')
+GCS_BLOB_OUTPUT_PREFIX = os.getenv('GCS_BLOB_OUTPUT_PREFIX') + '2/'
 
 LA_BOUNDARY_URL = "https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/State_County/MapServer/0/query?where=NAME='Louisiana'&outFields=*&outSR=4326&f=geojson"
 LA_BOUNDARY = requests.get(LA_BOUNDARY_URL).json()
@@ -47,23 +49,31 @@ def convert_tempo_to_8bit_cog(nc_file, output_file):
     subprocess.run([
         'gdal_translate',
         '-of', 'GTiff',
-        '-b', '1',
         '-projwin', str(LA_BOUNDS[0]), str(LA_BOUNDS[3]), str(LA_BOUNDS[2]), str(LA_BOUNDS[1]),
         '-a_srs', 'EPSG:4269',
         netcdf_path,
         temp_all_bands
     ], check=True)
 
+    # After Step 1, check how many bands were extracted
+    print(f"Checking bands in {temp_all_bands}...")
+    subprocess.run(['gdalinfo', temp_all_bands], check=True)
+
     # Step 2: Calculte daily MAX (or mean) NO2 across all bands
     print("Calculating daily NO2...")
-    subprocess.run([
-        'gdal_calc.py',
-        '--calc', 'numpy.nanmax(A, axis=0)', # or 'numpy.nanmean(A, axis=0)' for mean
-        '--allBands', 'A',
-        '-A', temp_all_bands,
-        '--outfile', temp_modified,
-        '--NoDataValue=0'
-    ], check=True)
+    with rasterio.open(temp_all_bands) as src:
+        data = src.read()
+        daily_max = np.nanmax(data, axis=0)
+        profile = src.profile.copy()
+        profile.update({
+            'count': 1,
+            'dtype': 'float64',
+            'nodata': 0
+        })
+        
+        with rasterio.open(temp_modified, 'w', **profile) as dst:
+            dst.write(daily_max, 1)
+
 
     # Step 3: Clip to LA borders
     subprocess.run([
@@ -81,7 +91,7 @@ def convert_tempo_to_8bit_cog(nc_file, output_file):
         'gdal_translate',
         '-of', 'COG',
         '-ot', 'Byte',
-        '-scale', '0', '2e17', '1', '255',
+        '-scale', '0', '5e17', '1', '255',
         '-a_nodata', '0',
         '-co', 'COMPRESS=DEFLATE',
         '-co', 'BLOCKSIZE=512',
@@ -107,8 +117,8 @@ client = storage.Client(project=GCS_PROJECT_ID)
 bucket = client.bucket(GCS_BUCKET)
 blobs = bucket.list_blobs(prefix=GCS_BLOB_PREFIX)
 
-# pattern = r'tempo_2024-\d{2}-\d{2}.nc' # all 2024 files
-pattern = r'tempo_2024-01-01.nc'  # Jan 01 2024 files only
+pattern = r'tempo_2024-\d{2}-\d{2}.nc' # all 2024 files
+# pattern = r'tempo_2024-01-\d{2}.nc'  # January 2024 files only
 
 processed = 0
 file_count = 0
